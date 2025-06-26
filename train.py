@@ -1,96 +1,80 @@
 """
 train.py  ――  FFT200次元特徴＋RandomForest 学習 & Cヘッダ生成
 ---------------------------------------------------------------
-使い方：
-    # 学習とテスト精度出力のみ
-    python train.py
-
-    # 学習＋モデルを C ヘッダ化
-    python train.py --export-c
+  python train.py              # 学習と精度出力
+  python train.py --export-c   # 上に加えて rf_model.h norm.npz 生成
 """
 
-import numpy as np
-import pandas as pd
+import numpy as np, pandas as pd, argparse
 from pathlib import Path
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble  import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-import argparse
+import joblib   # ← 再学習用 pickle 保存に使う
 
 # ------------------- parameters ------------------- #
-FS       = 10_000          # sampling freq [Hz]
-WIN_LEN  = 100             # window length (samples)
-OVERLAP  = 0.25            # 25 % overlap
-NFFT     = 1_024           # FFT length (2^n)
-FEAT_BIN = 50              # 0–500 Hz → 50 bins
-COLS     = ["accX", "accY", "accZ", "mic"]
+FS = 10_000; WIN_LEN = 100; OVERLAP = 0.25
+NFFT = 1_024; FEAT_BIN = 50
+COLS = ["accX", "accY", "accZ", "mic"]
 
-# ---------------- helper functions ---------------- #
+# ---------------- helper ---------------- #
 def windows(df, wlen, overlap):
-    hop = int(wlen * (1 - overlap))
-    for start in range(0, len(df) - wlen + 1, hop):
-        yield df.iloc[start:start + wlen]
+    hop = int(wlen * (1-overlap))
+    for st in range(0, len(df)-wlen+1, hop):
+        yield df.iloc[st:st+wlen]
 
 def fft_feature(win):
-    """return (4,50) array"""
-    feats = []
+    feats=[]
     for c in COLS:
         x = win[c].astype(float).values
         x -= x.mean()
-        spec = np.abs(np.fft.rfft(np.pad(x, (0, NFFT - len(x))))) / len(x)
-        feats.append(spec[:FEAT_BIN])            # 0–500 Hz
-    return np.array(feats)
+        spec = np.abs(np.fft.rfft(np.pad(x,(0,NFFT-len(x))))) / len(x)
+        feats.append(spec[:FEAT_BIN])
+    return np.array(feats)   # (4,50)
 
 def build_dataset(data_dir="data"):
-    feats, labs = [], []
-    for path in sorted(Path(data_dir).glob("sensor_log_*.csv")):
-        df = pd.read_csv(path)
-        if df.columns[0] != "accX":              # ヘッダなし対策
+    xs, ys = [], []
+    for p in sorted(Path(data_dir).glob("sensor_log_*.csv")):
+        df = pd.read_csv(p)
+        if df.columns[0] != "accX":
             df.columns = COLS[:df.shape[1]]
-        label = 0 if "normal" in path.name else 1
+        lab = 0 if "normal" in p.name else 1
         for w in windows(df, WIN_LEN, OVERLAP):
-            feats.append(fft_feature(w))
-            labs.append(label)
-    X = np.stack(feats).reshape(len(feats), -1)  # (N,200)
-    y = np.array(labs)
-    return X, y
+            xs.append(fft_feature(w));  ys.append(lab)
+    X = np.stack(xs).reshape(len(xs), -1)
+    return X, np.array(ys)
 
 # -------------------- main ------------------------ #
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--export-c", action="store_true",
-                    help="export trained RF to rf_model.h (int16)")
-    ap.add_argument("--data-dir", default="data",
-                    help="directory containing sensor_log_*.csv")
+    ap.add_argument("--export-c", action="store_true")
+    ap.add_argument("--data-dir", default="data")
     args = ap.parse_args()
 
-    # 1) load data & feature extraction
+    # 1. データ読み込み
     X_raw, y = build_dataset(args.data_dir)
 
-    # 2) standardize
+    # 2. 正規化
     scaler = StandardScaler().fit(X_raw)
     X = scaler.transform(X_raw)
     np.savez("norm.npz", mu=scaler.mean_, sigma=scaler.scale_)
-    print("[OK] norm.npz saved  (μ, σ)")
+    print("[OK] norm.npz saved")
 
-    # 3) train / test split
-    X_tr, X_te, y_tr, y_te = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=42)
+    # 3. 学習 / テスト分割
+    Xtr,Xte,ytr,yte = train_test_split(X, y, test_size=0.2,
+                                       stratify=y, random_state=42)
 
-    # 4) Random Forest training
-    rf = RandomForestClassifier(n_estimators=300, max_depth=None,
-                                random_state=42)
-    rf.fit(X_tr, y_tr)
-    acc = rf.score(X_te, y_te)
-    print(f"Test accuracy  : {acc:.3f}")
-    print(f"Train accuracy : {rf.score(X_tr, y_tr):.3f}")
+    # 4. RF 学習
+    rf = RandomForestClassifier(n_estimators=300, random_state=42)
+    rf.fit(Xtr, ytr)
+    print(f"Train acc: {rf.score(Xtr,ytr):.3f}  Test acc: {rf.score(Xte,yte):.3f}")
 
-    # 5) export C header
+    # 5. 任意でエクスポート
     if args.export_c:
-        try:
-            from micromlgen import port
-            with open("rf_model.h", "w") as f:
-                f.write(port(rf, dtype="int16"))
-            print("[OK] rf_model.h generated")
-        except ImportError:
-            print("micromlgen not installed; skip C header export.")
+        from micromlgen import port
+        with open("rf_model.h","w") as f:
+            f.write(port(rf, classmap={0:"NORMAL",1:"ERROR"}, dtype="int16"))
+        joblib.dump(rf,     "model_rf.pkl")
+        joblib.dump(scaler, "scaler.pkl")
+        print("[OK] rf_model.h / model_rf.pkl / scaler.pkl generated")
+
