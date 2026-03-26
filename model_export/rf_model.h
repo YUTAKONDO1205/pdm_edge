@@ -929,14 +929,3 @@ namespace Eloquent {
             }
         }
     }
-
-// rf_model.h の一番下に追加
-Eloquent::ML::Port::RandomForest model;
-
-int model_rf_predict(const int16_t* features) {
-    float x[64];
-    for (int i = 0; i < 64; i++) {
-        x[i] = features[i] / 32768.0f;  // 元の正規化スケールに戻す
-    }
-    return model.predict(x);
-}

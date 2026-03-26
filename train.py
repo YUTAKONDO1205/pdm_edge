@@ -1,80 +1,82 @@
-"""
-train.py  ――  FFT200次元特徴＋RandomForest 学習 & Cヘッダ生成
----------------------------------------------------------------
-  python train.py              # 学習と精度出力
-  python train.py --export-c   # 上に加えて rf_model.h norm.npz 生成
-"""
-
-import numpy as np, pandas as pd, argparse
-from pathlib import Path
-from sklearn.preprocessing import StandardScaler
+import pandas as pd
+import numpy as np
+import os
+from glob import glob
+from scipy.fft import rfft
+from scipy.signal import windows
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
-import joblib   # ← 再学習用 pickle 保存に使う
+from micromlgen import port
 
-# ------------------- parameters ------------------- #
-FS = 10_000; WIN_LEN = 100; OVERLAP = 0.25
-NFFT = 1_024; FEAT_BIN = 50
-COLS = ["accX", "accY", "accZ", "mic"]
+# 設定
+DATA_DIR = 'data'
+EXPORT_DIR = 'model_export'
+CHANNELS = ['accX', 'accY', 'accZ', 'mic']
+N_FFT = 512
+BIN_SIZE = 32                   # 512→256point使うので 32bin平均 → 8次元/ch
+DIM_PER_CH = 256 // BIN_SIZE   # = 8
+FINAL_DIM = DIM_PER_CH * len(CHANNELS)  # = 8×4 = 32次元
 
-# ---------------- helper ---------------- #
-def windows(df, wlen, overlap):
-    hop = int(wlen * (1-overlap))
-    for st in range(0, len(df)-wlen+1, hop):
-        yield df.iloc[st:st+wlen]
+# 出力フォルダ作成
+os.makedirs(EXPORT_DIR, exist_ok=True)
 
-def fft_feature(win):
-    feats=[]
-    for c in COLS:
-        x = win[c].astype(float).values
-        x -= x.mean()
-        spec = np.abs(np.fft.rfft(np.pad(x,(0,NFFT-len(x))))) / len(x)
-        feats.append(spec[:FEAT_BIN])
-    return np.array(feats)   # (4,50)
+# 特徴抽出関数（FFT→bin平均）
+def extract_features(signal):
+    sig = signal.values
+    if len(sig) != N_FFT:
+        sig = sig[:N_FFT]  # 念のため長さ制限
+    windowed = sig * windows.hann(len(sig))
+    fft = np.abs(rfft(windowed))[:256]  # 512点のうち0〜256まで（Nyquist 500Hz）
+    feat = [fft[i*BIN_SIZE:(i+1)*BIN_SIZE].mean() for i in range(DIM_PER_CH)]
+    return feat
 
-def build_dataset(data_dir="data"):
-    xs, ys = [], []
-    for p in sorted(Path(data_dir).glob("sensor_log_*.csv")):
-        df = pd.read_csv(p)
-        if df.columns[0] != "accX":
-            df.columns = COLS[:df.shape[1]]
-        lab = 0 if "normal" in p.name else 1
-        for w in windows(df, WIN_LEN, OVERLAP):
-            xs.append(fft_feature(w));  ys.append(lab)
-    X = np.stack(xs).reshape(len(xs), -1)
-    return X, np.array(ys)
+# データ読み込み関数
+def load_dataset(label, keyword):
+    x_list, y_list = [], []
+    files = sorted([f for f in os.listdir(DATA_DIR) if keyword in f and f.endswith('.csv')])
+    for fname in files:
+        df = pd.read_csv(os.path.join(DATA_DIR, fname))
+        feats = []
+        for ch in CHANNELS:
+            if ch not in df.columns:
+                print(f"⚠ 列 {ch} が {fname} にありません")
+                continue
+            feats.extend(extract_features(df[ch]))
+        if len(feats) == FINAL_DIM:
+            x_list.append(feats)
+            y_list.append(label)
+    return np.array(x_list), np.array(y_list)
 
-# -------------------- main ------------------------ #
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--export-c", action="store_true")
-    ap.add_argument("--data-dir", default="data")
-    args = ap.parse_args()
+# データ読み込み
+X_normal, y_normal = load_dataset(0, 'normal')
+X_error,  y_error  = load_dataset(1, 'error')
+X = np.vstack([X_normal, X_error])
+y = np.concatenate([y_normal, y_error])
 
-    # 1. データ読み込み
-    X_raw, y = build_dataset(args.data_dir)
+# 正規化
+MU = X.mean(axis=0)
+SIG = np.clip(X.std(axis=0), 1e-3, None)
+Xn = (X - MU) / SIG
 
-    # 2. 正規化
-    scaler = StandardScaler().fit(X_raw)
-    X = scaler.transform(X_raw)
-    np.savez("norm.npz", mu=scaler.mean_, sigma=scaler.scale_)
-    print("[OK] norm.npz saved")
+# train/test分割（汎化性能確認用）
+X_train, X_test, y_train, y_test = train_test_split(Xn, y, test_size=0.25, random_state=42, stratify=y)
 
-    # 3. 学習 / テスト分割
-    Xtr,Xte,ytr,yte = train_test_split(X, y, test_size=0.2,
-                                       stratify=y, random_state=42)
+# 学習
+clf = RandomForestClassifier(n_estimators=100, random_state=42)
+clf.fit(X_train, y_train)
 
-    # 4. RF 学習
-    rf = RandomForestClassifier(n_estimators=300, random_state=42)
-    rf.fit(Xtr, ytr)
-    print(f"Train acc: {rf.score(Xtr,ytr):.3f}  Test acc: {rf.score(Xte,yte):.3f}")
+# 評価
+print("=== Train ===")
+print(classification_report(y_train, clf.predict(X_train)))
+print("=== Test ===")
+print(classification_report(y_test, clf.predict(X_test)))
 
-    # 5. 任意でエクスポート
-    if args.export_c:
-        from micromlgen import port
-        with open("rf_model.h","w") as f:
-            f.write(port(rf, classmap={0:"NORMAL",1:"ERROR"}, dtype="int16"))
-        joblib.dump(rf,     "model_rf.pkl")
-        joblib.dump(scaler, "scaler.pkl")
-        print("[OK] rf_model.h / model_rf.pkl / scaler.pkl generated")
+# モデルをC++用に変換
+with open(f'{EXPORT_DIR}/rf_model.h', 'w') as f:
+    f.write(port(clf))
+with open(f'{EXPORT_DIR}/norm.h', 'w') as f:
+    f.write(f'const float MU[{FINAL_DIM}] = {{' + ','.join([f'{m:.6f}' for m in MU]) + '};\n')
+    f.write(f'const float SIG[{FINAL_DIM}] = {{' + ','.join([f'{s:.6f}' for s in SIG]) + '};\n')
 
+print("✅ モデル学習＆C++ヘッダ出力が完了しました。")
