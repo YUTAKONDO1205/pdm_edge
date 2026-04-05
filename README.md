@@ -1,5 +1,7 @@
 # pdm_edge
 
+開発者: 近藤悠太 (Kondo Yuta)
+
 # SPRESENSE Vibration/Acoustic Anomaly Detection
 
 本研究では、三軸加速度センサと音響センサから取得した信号をSPRESENSEでサンプリングし、
