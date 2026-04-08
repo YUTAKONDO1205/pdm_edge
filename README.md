@@ -2,33 +2,33 @@
 
 開発者: 近藤悠太 (Kondo Yuta)
 
-# SPRESENSE Vibration/Acoustic Anomaly Detection
+## 概要
 
-本研究では、三軸加速度センサと音響センサから取得した信号をSPRESENSEでサンプリングし、
-FFTにより特徴量を抽出した後、Isolation ForestとRandom Forestを用いて異常兆候を検知する。
-対象はモーターの異常振動であり、不釣り合いおもりを付与した異常状態との比較により評価した。
+このリポジトリは、SPRESENSEと加速度・音響センサを用いた振動異常検知AIシステムです。  
+加速度3軸とマイクの4チャンネル波形を使い、エッジ側で異常を判定できるようにしています。
 
-SPRESENSEと加速度・音響センサを用いた振動異常検知AIシステムのGitHub公開用リポジトリです。
+実装の流れはシンプルで、以下の構成です。
 
-この研究では、三軸加速度センサと音響センサをSPRESENSEで同期サンプリングし、FFTで特徴量を作成し、Isolation ForestとRandom Forestを用いて異常候補抽出と分類を行います。サンプリングは10 kHz、特徴量は4チャネル×50 bin = 200次元、窓長100サンプル、75%オーバーラップが研究の基本設定です。
-# SPRESENSEと加速度・音響センサを用いた振動異常検知AIシステム
-
-SPRESENSEと加速度・音響センサの4チャンネル波形を使って、振動異常を判定するエッジAIサンプルです。  
-実装の流れは既存の形を踏襲し、`FFT -> 周波数帯域平均 -> 正規化 -> RandomForest -> C/C++ヘッダ出力` のまま整理しています。
+- 波形読込
+- FFTによる周波数特徴量抽出
+- 正規化
+- Random Forest による正常 / 異常分類
+- SPRESENSE向けヘッダ出力
 
 ## 主なファイル
 
-- `README.md`
-- `requirements.txt`
-- `config.py`
-- `dataset.py`
-- `features.py`
-- `train.py`
-- `evaluate.py`
-- `export_headers.py`
-- `pdm_edge_sketch.ino`
+- `README.md`: プロジェクト全体の説明
+- `requirements.txt`: Python依存関係
+- `config.py`: 学習条件やパス設定
+- `dataset.py`: CSVデータの読込
+- `features.py`: FFTと特徴量生成
+- `train.py`: 学習とモデル保存
+- `evaluate.py`: 評価と混同行列出力
+- `export_headers.py`: SPRESENSE向けヘッダ再生成
+- `pdm_edge_sketch.ino`: SPRESENSE側の最小スケッチ例
+- `spresense/README.md`: 組み込み側の使い方
 
-互換用に `src/` も残してあり、`python -m src.train` のような呼び出しもできます。
+`src/` 配下には互換用の薄いラッパーを残してあり、`python -m src.train` のような呼び出しもできます。
 
 ## ディレクトリ構成
 
@@ -39,6 +39,8 @@ pdm_edge/
 │  └─ error/
 ├─ figures/
 ├─ model_export/
+│  ├─ rf_model.h
+│  └─ norm.h
 ├─ spresense/
 │  ├─ README.md
 │  └─ anomaly_inference.hpp
@@ -50,13 +52,16 @@ pdm_edge/
 ├─ export_headers.py
 ├─ check_norm.py
 ├─ npz2header.py
+├─ runtime_bootstrap.py
 ├─ pdm_edge_sketch.ino
-└─ README.md
+└─ requirements.txt
 ```
 
 `data/raw/normal` と `data/raw/error` の構成でも読み込めます。
 
-## 入力CSV形式
+## 入力データ形式
+
+CSVは以下の4列を想定しています。
 
 ```csv
 accX,accY,accZ,mic
@@ -66,16 +71,18 @@ accX,accY,accZ,mic
 ...
 ```
 
-1ファイルは64サンプルを想定しています。  
-64未満なら0埋め、64を超える場合は先頭64サンプルを使います。
+- 1ファイルあたり64サンプルを想定
+- 64未満なら0埋め
+- 64を超える場合は先頭64サンプルを使用
 
 ## 特徴量設計
 
-- 4チャンネル: `accX`, `accY`, `accZ`, `mic`
+- 使用チャンネル: `accX`, `accY`, `accZ`, `mic`
 - 窓長: 64 samples
 - 窓関数: Hann window
-- 周波数特徴: FFT先頭32ビンを8帯域に平均化
-- 特徴量次元: `8 bands x 4 channels = 32`
+- FFT: 先頭32ビンを使用
+- 帯域平均: 8バンド
+- 最終特徴量次元: `8 x 4 = 32`
 - 分類器: `RandomForestClassifier`
 
 設定値は `config.py` にまとめています。
@@ -88,13 +95,18 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+補足:
+
+- `python train.py` 実行時に必要ライブラリが見つからない場合、`runtime_bootstrap.py` がローカルの `venv` を優先して再実行します
+- それでも不足する場合は `pip install -r requirements.txt` を実行してください
+
 ## 学習
 
 ```bash
 python train.py
 ```
 
-生成される主なファイル:
+学習後に以下が生成されます。
 
 - `model_rf.pkl`
 - `scaler.pkl`
@@ -108,7 +120,9 @@ python train.py
 python evaluate.py
 ```
 
-評価結果を表示し、混同行列を `figures/confusion_matrix.png` に保存します。
+評価結果を表示し、混同行列を以下に保存します。
+
+- `figures/confusion_matrix.png`
 
 ## ヘッダ再出力
 
@@ -116,24 +130,29 @@ python evaluate.py
 python export_headers.py
 ```
 
-保存済みの `model_rf.pkl` と `scaler.pkl` から、SPRESENSE組み込み用のヘッダを再生成します。
+保存済みの `model_rf.pkl` と `scaler.pkl` から、SPRESENSE向けヘッダを再生成します。  
+出力先は `model_export/` 配下です。
 
-## SPRESENSE組み込み
+## SPRESENSEへの組み込み
 
-`spresense/anomaly_inference.hpp` に、Python側と同じ特徴量抽出と正規化処理を入れています。  
-`pdm_edge_sketch.ino` はそれを呼び出す最小スケッチです。
+SPRESENSE側では以下のファイルを使います。
+
+- `model_export/rf_model.h`
+- `model_export/norm.h`
+- `spresense/anomaly_inference.hpp`
+- `pdm_edge_sketch.ino`
 
 基本手順:
 
-1. `python train.py` で `model_export/rf_model.h` と `model_export/norm.h` を生成する
-2. 必要なヘッダをSPRESENSE側プロジェクトへ配置する
-3. `SensorFrame` に64サンプルぶんの `acc_x`, `acc_y`, `acc_z`, `mic` を入れる
-4. `SpresenseAnomaly::Predict(frame)` で判定する
+1. `python train.py` でモデルとヘッダを生成する
+2. `model_export/` 配下のヘッダをSPRESENSE側プロジェクトで参照する
+3. `SensorFrame` に64サンプルぶんのセンサ値を格納する
+4. `SpresenseAnomaly::Predict(frame)` を呼び出す
 
-詳細は `spresense/README.md` を参照してください。
+詳細は [spresense/README.md](C:/Users/PC_User/pdm_edge/spresense/README.md) を参照してください。
 
 ## 補足
 
-- センサ構成を増やす場合は `config.py` の `channels` を変更します
-- 特徴量粒度を変える場合は `fft_size`, `spectrum_bins`, `band_count` を調整します
-- 実装は軽量さを優先し、既存方針どおり Random Forest ベースにしています
+- センサ構成を変更したい場合は `config.py` の `channels` を編集します
+- 特徴量粒度を変えたい場合は `fft_size`, `spectrum_bins`, `band_count` を調整します
+- 現在の実装は軽量性と組み込みやすさを優先して Random Forest ベースにしています
