@@ -1,20 +1,25 @@
-# npz2header.py
+from pathlib import Path
+
+from runtime_bootstrap import ensure_runtime
+
+ensure_runtime(("numpy",))
+
 import numpy as np
 
-data = np.load("norm.npz")
-mu = data["mu"]
-sigma = data["sigma"]
+from config import DEFAULT_CONFIG
+from export_headers import render_norm_header
 
-with open("norm.h", "w") as f:
-    f.write("#ifndef NORM_H_\n#define NORM_H_\n\n")
-    f.write("#include <stdint.h>\n\n")
 
-    f.write("const int16_t MU[200] = {")
-    f.write(",".join(str(int(m)) for m in mu))
-    f.write("};\n\n")
+def main() -> None:
+    data = np.load(DEFAULT_CONFIG.norm_npz_path)
+    mu = data["mu"]
+    sig = data["sig"]
+    header = render_norm_header(mu, sig)
 
-    f.write("const int16_t SIG[200] = {")
-    f.write(",".join(str(int(s)) if s != 0 else "1" for s in sigma))  # divide-by-zero 対策
-    f.write("};\n\n")
+    DEFAULT_CONFIG.norm_header_path.parent.mkdir(parents=True, exist_ok=True)
+    DEFAULT_CONFIG.norm_header_path.write_text(header, encoding="utf-8")
+    print(f"Wrote {DEFAULT_CONFIG.norm_header_path}")
 
-    f.write("#endif\n")
+
+if __name__ == "__main__":
+    main()

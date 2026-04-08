@@ -1,7 +1,7 @@
-# 仮想環境
 venv/
-# データ
+.venv/
 data/
-# キャッシュ類
+figures/
 __pycache__/
+*.pyc
 *.npz

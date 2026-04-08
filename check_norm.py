@@ -1,19 +1,29 @@
+from pathlib import Path
+
+from runtime_bootstrap import ensure_runtime
+
+ensure_runtime(("numpy",))
+
 import numpy as np
 
-# norm.npz を読み込む
-d = np.load('norm.npz')
-MU = d['mu']
-SIG = d['sig']
+from config import DEFAULT_CONFIG
 
-# 基本情報を表示
-print("MU shape:", MU.shape)
-print("SIG shape:", SIG.shape)
 
-# チェック項目
-print("=== SIG のチェック ===")
-print("0 が含まれているか:", np.any(SIG == 0))
-print("NaN が含まれているか:", np.any(np.isnan(SIG)))
-print("inf が含まれているか:", np.any(np.isinf(SIG)))
+NORM_PATH = DEFAULT_CONFIG.norm_npz_path
 
-# もしあればそのインデックスも確認
-print("0 の位置:", np.where(SIG == 0)[0])
+
+def main() -> None:
+    data = np.load(NORM_PATH)
+    mu = data["mu"]
+    sig = data["sig"]
+
+    print(f"norm file: {NORM_PATH}")
+    print(f"MU shape: {mu.shape}")
+    print(f"SIG shape: {sig.shape}")
+    print(f"SIG has zero: {np.any(sig == 0)}")
+    print(f"SIG has NaN: {np.any(np.isnan(sig))}")
+    print(f"SIG has inf: {np.any(np.isinf(sig))}")
+
+
+if __name__ == "__main__":
+    main()
