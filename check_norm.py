@@ -13,9 +13,9 @@ NORM_PATH = DEFAULT_CONFIG.norm_npz_path
 
 
 def main() -> None:
-    data = np.load(NORM_PATH)
-    mu = data["mu"]
-    sig = data["sig"]
+    with np.load(NORM_PATH) as data:
+        mu = data["mu"]
+        sig = data["sig"]
 
     print(f"norm file: {NORM_PATH}")
     print(f"MU shape: {mu.shape}")

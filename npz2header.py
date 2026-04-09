@@ -11,9 +11,9 @@ from export_headers import render_norm_header
 
 
 def main() -> None:
-    data = np.load(DEFAULT_CONFIG.norm_npz_path)
-    mu = data["mu"]
-    sig = data["sig"]
+    with np.load(DEFAULT_CONFIG.norm_npz_path) as data:
+        mu = data["mu"]
+        sig = data["sig"]
     header = render_norm_header(mu, sig)
 
     DEFAULT_CONFIG.norm_header_path.parent.mkdir(parents=True, exist_ok=True)

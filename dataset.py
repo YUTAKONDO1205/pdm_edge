@@ -17,6 +17,19 @@ class DatasetBundle:
     files: list[Path]
 
 
+def _read_frame(csv_path: Path, config: ProjectConfig) -> pd.DataFrame:
+    try:
+        return pd.read_csv(
+            csv_path,
+            usecols=list(config.channels),
+            dtype=np.float64,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"{csv_path} is missing required channel columns: {', '.join(config.channels)}"
+        ) from exc
+
+
 def _resolve_class_files(config: ProjectConfig) -> tuple[list[Path], list[Path]]:
     for root in config.candidate_data_roots:
         normal_dir = root / config.normal_folder
@@ -50,7 +63,7 @@ def _load_split(
     used_files: list[Path] = []
 
     for csv_path in files:
-        frame = pd.read_csv(csv_path)
+        frame = _read_frame(csv_path, config)
         feature_vector = extract_feature_vector(frame, config)
         features.append(feature_vector)
         labels.append(label)
@@ -65,11 +78,14 @@ def load_dataset(config: ProjectConfig = DEFAULT_CONFIG) -> DatasetBundle:
     normal_features, normal_labels, normal_used = _load_split(normal_files, 0, config)
     error_features, error_labels, error_used = _load_split(error_files, 1, config)
 
-    features = np.asarray(normal_features + error_features, dtype=np.float64)
-    labels = np.asarray(normal_labels + error_labels, dtype=np.int64)
+    all_features = normal_features + error_features
+    all_labels = normal_labels + error_labels
     files = normal_used + error_used
 
-    if not len(features):
+    if not all_features:
         raise ValueError("Dataset is empty")
+
+    features = np.vstack(all_features).astype(np.float64, copy=False)
+    labels = np.fromiter(all_labels, dtype=np.int64)
 
     return DatasetBundle(features=features, labels=labels, files=files)
