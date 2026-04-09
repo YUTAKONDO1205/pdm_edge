@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 import pandas as pd
 from scipy.fft import rfft
@@ -15,12 +17,17 @@ def _prepare_signal(signal: np.ndarray, target_length: int) -> np.ndarray:
     return signal[:target_length]
 
 
+@lru_cache(maxsize=None)
+def _hann_window(target_length: int) -> np.ndarray:
+    return windows.hann(target_length)
+
+
 def extract_band_features(
     signal: np.ndarray | list[float],
     config: ProjectConfig = DEFAULT_CONFIG,
 ) -> np.ndarray:
     prepared = _prepare_signal(np.asarray(signal, dtype=np.float64), config.fft_size)
-    windowed = prepared * windows.hann(config.fft_size)
+    windowed = prepared * _hann_window(config.fft_size)
     spectrum = np.abs(rfft(windowed))
 
     if spectrum.size < config.spectrum_bins:
@@ -28,11 +35,7 @@ def extract_band_features(
     else:
         spectrum = spectrum[: config.spectrum_bins]
 
-    features = [
-        spectrum[index : index + config.band_width].mean()
-        for index in range(0, config.spectrum_bins, config.band_width)
-    ]
-    return np.asarray(features, dtype=np.float64)
+    return spectrum.reshape(config.band_count, config.band_width).mean(axis=1, dtype=np.float64)
 
 
 def extract_feature_vector(
@@ -43,9 +46,10 @@ def extract_feature_vector(
     if missing:
         raise ValueError(f"missing channel columns: {', '.join(missing)}")
 
+    channel_matrix = frame.loc[:, list(config.channels)].to_numpy(dtype=np.float64, copy=False)
     channel_features = [
-        extract_band_features(frame[channel].to_numpy(dtype=np.float64), config)
-        for channel in config.channels
+        extract_band_features(channel_matrix[:, index], config)
+        for index in range(channel_matrix.shape[1])
     ]
     feature_vector = np.concatenate(channel_features)
 

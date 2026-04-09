@@ -26,7 +26,7 @@ def save_artifacts(
     config.ensure_output_dirs()
 
     with config.model_pickle_path.open("wb") as file:
-        pickle.dump(model, file)
+        pickle.dump(model, file, protocol=pickle.HIGHEST_PROTOCOL)
 
     with config.scaler_pickle_path.open("wb") as file:
         pickle.dump(
@@ -39,6 +39,7 @@ def save_artifacts(
                 "band_count": config.band_count,
             },
             file,
+            protocol=pickle.HIGHEST_PROTOCOL,
         )
 
     np.savez(config.norm_npz_path, mu=mu, sig=sig)
@@ -61,6 +62,7 @@ def main() -> None:
     model = RandomForestClassifier(
         n_estimators=config.n_estimators,
         random_state=config.random_state,
+        n_jobs=config.n_jobs,
     )
     model.fit(x_train, y_train)
 

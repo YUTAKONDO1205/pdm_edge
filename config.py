@@ -17,6 +17,7 @@ class ProjectConfig:
     test_size: float = 0.25
     random_state: int = 42
     n_estimators: int = 100
+    n_jobs: int = -1
 
     def __post_init__(self) -> None:
         if self.spectrum_bins % self.band_count != 0:
